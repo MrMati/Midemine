@@ -2,66 +2,44 @@ import sys
 import asyncio
 
 import httpx
-from enum import Enum
-from typing import Any, List, TypeVar, Optional, NewType, AsyncIterable
-from pydantic import BaseModel, TypeAdapter
+from typing import Any, TypeVar, Optional, AsyncIterable
+from pydantic import TypeAdapter
 
+from shared.domain import (
+    StreamingServiceStatus,
+    MediaAssetInfo,
+    EntitlementMessage,
+    EntitlementResponse,
+    JWT,
+)
+from shared.utils import first_n
 from cdm import MidemineCDM
 
 # TODO use logging library, but pls not the builtin one
 
 
-class StreamingServiceStatus(BaseModel):
-    operational: bool
-    status: str
-
-
-# TODO consider a nested structure with exact media container/encoding info
-class MediaType(str, Enum):
-    audio = "audio"
-    video = "video"
-
-
-class MediaAssetInfo(BaseModel):
-    id: str
-    name: str
-    description: str
-    media_type: MediaType
-    encryption_type: str  # TODO proper enum
-
-
-class EntitlementMessage(BaseModel):
-    asset_id: str
-    usage_type: str  # TODO proper enum
-
-
-# TODO placeholder - use pyjwt
-JWT = NewType("JWT", str)
-
-
-class EntitlementResponse(BaseModel):
-    claims: List[str]  # TODO proper types
-    jwt: JWT
-
-
 T = TypeVar("T")
 
 
-class StreamingClientAsync:
+class ContentClientAsync:
     def __init__(self, base_url: str):
-        self.client = httpx.AsyncClient(base_url=base_url, timeout=10)
+        self.client = httpx.AsyncClient(
+            base_url=base_url, timeout=10, follow_redirects=True, verify=False
+        )
 
     # NOTE move to separate inheritable class instead of copying
     async def _request(self, method: str, path: str, model: Any, **kwargs) -> T:
         r = await self.client.request(method, path, **kwargs)
-        r.raise_for_status()  # FIXME keep connection abstraction hidden from class user
+        if not r.is_success:
+            return None
         return TypeAdapter(model).validate_python(r.json())
 
     async def check_connection(self) -> Optional[StreamingServiceStatus]:
         # NOTE dont use such constructions much
         try:
             return await self._request("GET", "/status", StreamingServiceStatus)
-        except (httpx.HTTPStatusError, httpx.RequestError):
+        except (httpx.HTTPStatusError, httpx.RequestError) as e:
+            breakpoint()
             return None
 
     async def asset_info(self, asset: str) -> MediaAssetInfo:
@@ -75,16 +53,24 @@ class StreamingClientAsync:
 
     # FIXME probably wrong
     async def fetch_asset_streaming(self, asset: str) -> AsyncIterable[bytes]:
-        r = await self.client.stream("GET", f"/assets/{asset}")
-        if not r.is_success:
-            return None
-        return r.iter_bytes()
+        #async def _gen():
+        try:
+            async with self.client.stream("GET", f"/assets/{asset}") as resp:
+                if not resp.is_success:
+                    return
+                async for chunk in resp.aiter_bytes(1024 * 1024):
+                    yield chunk
+        except (httpx.HTTPStatusError, httpx.RequestError):
+            return
+
+        #return _gen()
+
 
     async def get_entitlement_jwt(
         self, entitlement_msg: EntitlementMessage
     ) -> EntitlementResponse:
         return await self._request(
-            "GET", "/entitlement", EntitlementResponse, json=entitlement_msg
+            "POST", "/entitlement", EntitlementResponse, json=entitlement_msg.model_dump()
         )
 
     async def close(self):
@@ -93,7 +79,9 @@ class StreamingClientAsync:
 
 class LicenseClientAsync:
     def __init__(self, base_url: str):
-        self.client = httpx.AsyncClient(base_url=base_url, timeout=10)
+        self.client = httpx.AsyncClient(
+            base_url=base_url, timeout=10, follow_redirects=True, verify=False
+        )
 
     # license_req is an unparseable binary blob, so just passing it through
     async def acquire_license(self, license_req: bytes, jwt: JWT) -> Optional[bytes]:
@@ -111,21 +99,21 @@ class LicenseClientAsync:
 
 
 async def playback_not_encrypted(
-    service_client: StreamingClientAsync, asset_info: MediaAssetInfo
+    service_client: ContentClientAsync, asset_info: MediaAssetInfo
 ):
     print(f"Playing {asset_info.name}")
-    content = await service_client.fetch_asset_streaming(asset_info.name)
-    if content is None:
+    content_stream = service_client.fetch_asset_streaming(asset_info.id)
+    if content_stream is None:
         print(f"Cannot fetch asset {asset_info.name}")
         return
 
-    print(len(content))
+    print(await first_n(content_stream, 16))
 
     print(f"Playback of {asset_info.name} finished")
 
 
 async def playback_encrypted(
-    service_url: str, service_client: StreamingClientAsync, asset_info: MediaAssetInfo
+    service_client: ContentClientAsync, asset_info: MediaAssetInfo
 ):
     print(f"Playing {asset_info.name}")
 
@@ -143,7 +131,7 @@ async def playback_encrypted(
     # TODO parse JWT in entitlement_response to get stuff like key id
     asset_key_id = "abcd"
 
-    license_client = LicenseClientAsync(service_url)
+    license_client = LicenseClientAsync("http://key_server.localhost/")
 
     await cdm_init_task
 
@@ -161,14 +149,15 @@ async def playback_encrypted(
         print(f"Cannot parse license for asset {asset_info.name}")
         return
 
-    content = await service_client.fetch_asset_streaming(asset_info.name)
-    if content is None:
+    content_stream = service_client.fetch_asset_streaming(asset_info.id)
+    if content_stream is None:
         print(f"Cannot fetch asset {asset_info.name}")
         return
+    
 
-    decrypted_content = cdm_adapter.decrypt_content(content)
+    decrypted_content = await cdm_adapter.decrypt_content(content_stream)
 
-    print(len(decrypted_content))
+    print(await first_n(decrypted_content, 16))
 
     print(f"Protected playback of {asset_info.name} finished")
 
@@ -192,7 +181,7 @@ async def app(service_url: str, asset: str):
     # 5. CDM does its thing
     # 6. playback starts
 
-    service_client = StreamingClientAsync(service_url)
+    service_client = ContentClientAsync(service_url)
     status = await service_client.check_connection()
     if status is None:
         print(f"Cannot connect to streaming service at {service_url}")
@@ -204,12 +193,13 @@ async def app(service_url: str, asset: str):
     asset_info = await service_client.asset_info(asset)
     if asset_info is None:
         print(f"Asset {asset} does not exist")
+        return
 
     if asset_info.encryption_type == "none":
         await playback_not_encrypted(service_client, asset_info)
         return
 
-    await playback_encrypted(service_url, service_client, asset_info)
+    await playback_encrypted(service_client, asset_info)
 
 
 def main():
@@ -218,7 +208,7 @@ def main():
         print("Usage: ./player <host> <media_asset>")
         return
 
-    asyncio.run(app(sys.argv[1], sys.argv[2]))
+    asyncio.run(app(f"http://{sys.argv[1]}/", sys.argv[2]))
 
 
 if __name__ == "__main__":

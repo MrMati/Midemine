@@ -1,0 +1,11 @@
+{
+    admin off
+}
+
+hosting.localhost {
+    reverse_proxy localhost:5005
+}
+
+key_server.localhost {
+    reverse_proxy localhost:5060
+}

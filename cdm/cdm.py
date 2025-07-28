@@ -1,4 +1,11 @@
-from typing import Optional
+from typing import Optional, AsyncIterable
+import asyncio
+from pydantic import BaseModel
+
+
+class LicenseParseResult(BaseModel):
+    ok: bool
+    msg: Optional[str]
 
 
 class MidemineCDM:
@@ -6,7 +13,8 @@ class MidemineCDM:
         self.license_data = None
 
     # part of future tamper protection mechanisms
-    def check_env(self) -> bool:
+    async def check_env(self) -> bool:
+        await asyncio.sleep(1)
         return True
 
     # TODO add session management
@@ -16,10 +24,16 @@ class MidemineCDM:
 
     def insert_license(self, license: bytes) -> None:
         self.license_data = license
+        return LicenseParseResult(ok=True, msg=None)
 
     # TODO add output/decoding settings
 
-    def decrypt_content(self, content: bytes) -> Optional[bytes]:
+    async def decrypt_content(self, content: AsyncIterable[bytes]) -> Optional[AsyncIterable[bytes]]:
         if self.license_data is None:
             return None
-        return bytes(map(lambda x: x ^ 0x55, content))
+
+        async def _gen():
+            async for chunk in content:
+                yield bytes(b ^ 0x55 for b in chunk)
+
+        return _gen()
