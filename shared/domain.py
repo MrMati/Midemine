@@ -2,6 +2,7 @@ from enum import Enum
 from typing import List, NewType
 from pydantic import BaseModel
 
+
 class StreamingServiceStatus(BaseModel):
     operational: bool
     status: str
@@ -27,10 +28,13 @@ class EntitlementMessage(BaseModel):
     usage_type: str  # TODO proper enum
 
 
-# TODO placeholder - use pyjwt
 JWT = NewType("JWT", str)
 
 
 class EntitlementResponse(BaseModel):
     claims: List[str]  # TODO proper types
-    jwt: JWT
+    token: JWT
+
+
+class EntitlementTokenData(BaseModel):
+    good: bool

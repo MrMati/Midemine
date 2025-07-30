@@ -4,11 +4,13 @@ version = "0.1.0"
 description = "Parody clone of an unpopular DRM"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = [    
+dependencies = [
     "fastapi[standard-no-fastapi-cloud-cli]>=0.116.1",
     "httpx>=0.28.1",
     "mypy>=1.17.0",
     "pyjwt>=2.10.1",
     "aiofiles>=24.1.0",
     "types-aiofiles>=24.1.0.20250708",
+    "pydantic-settings>=2.10.1",
+    "cryptography>=45.0.5",
 ]

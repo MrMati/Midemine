@@ -3,7 +3,7 @@ import asyncio
 
 import httpx
 from typing import Any, TypeVar, Optional, AsyncIterable
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from shared.domain import (
     StreamingServiceStatus,
@@ -28,21 +28,25 @@ class ContentClientAsync:
         )
 
     # NOTE move to separate inheritable class instead of copying
-    async def _request(self, method: str, path: str, model: Any, **kwargs) -> T:
+    async def _request(
+        self, method: str, path: str, model: Any, **kwargs
+    ) -> Optional[T]:
         r = await self.client.request(method, path, **kwargs)
         if not r.is_success:
             return None
-        return TypeAdapter(model).validate_python(r.json())
+        try:
+            return TypeAdapter(model).validate_python(r.json())
+        except ValidationError:
+            return None
 
     async def check_connection(self) -> Optional[StreamingServiceStatus]:
         # NOTE dont use such constructions much
         try:
             return await self._request("GET", "/status", StreamingServiceStatus)
-        except (httpx.HTTPStatusError, httpx.RequestError) as e:
-            breakpoint()
+        except (httpx.HTTPStatusError, httpx.RequestError):
             return None
 
-    async def asset_info(self, asset: str) -> MediaAssetInfo:
+    async def asset_info(self, asset: str) -> Optional[MediaAssetInfo]:
         return await self._request("GET", f"/catalog/{asset}", MediaAssetInfo)
 
     async def fetch_asset(self, asset: str) -> Optional[bytes]:
@@ -53,7 +57,7 @@ class ContentClientAsync:
 
     # FIXME probably wrong
     async def fetch_asset_streaming(self, asset: str) -> AsyncIterable[bytes]:
-        #async def _gen():
+        # async def _gen():
         try:
             async with self.client.stream("GET", f"/assets/{asset}") as resp:
                 if not resp.is_success:
@@ -63,14 +67,16 @@ class ContentClientAsync:
         except (httpx.HTTPStatusError, httpx.RequestError):
             return
 
-        #return _gen()
+        # return _gen()
 
-
-    async def get_entitlement_jwt(
+    async def get_entitlement_token(
         self, entitlement_msg: EntitlementMessage
-    ) -> EntitlementResponse:
+    ) -> Optional[EntitlementResponse]:
         return await self._request(
-            "POST", "/entitlement", EntitlementResponse, json=entitlement_msg.model_dump()
+            "POST",
+            "/entitlement",
+            EntitlementResponse,
+            json=entitlement_msg.model_dump(),
         )
 
     async def close(self):
@@ -123,7 +129,7 @@ async def playback_encrypted(
     cdm_init_task = asyncio.create_task(cdm_adapter.check_env())
 
     entitlement_msg = EntitlementMessage(asset_id=asset_info.id, usage_type="playback")
-    entitlement_response = await service_client.get_entitlement_jwt(entitlement_msg)
+    entitlement_response = await service_client.get_entitlement_token(entitlement_msg)
     if entitlement_response is None:
         print(f"Cannot get entitlement for asset {asset_info.name}")
         return
@@ -138,7 +144,7 @@ async def playback_encrypted(
     license_req = cdm_adapter.get_license_request(asset_info.id, asset_key_id)
 
     license = await license_client.acquire_license(
-        license_req, entitlement_response.jwt
+        license_req, entitlement_response.token
     )
     if license is None:
         print(f"Cannot acquire license for asset {asset_info.name}")
@@ -153,7 +159,6 @@ async def playback_encrypted(
     if content_stream is None:
         print(f"Cannot fetch asset {asset_info.name}")
         return
-    
 
     decrypted_content = await cdm_adapter.decrypt_content(content_stream)
 
