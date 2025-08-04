@@ -11,12 +11,13 @@
 ## packager interface might be a part of it
 
 from typing import Optional, Annotated
+from functools import lru_cache
 
 from pydantic import TypeAdapter, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import jwt
-from jwt.exceptions import InvalidTokenError, ExpiredSignatureError
-from fastapi import FastAPI, Header, Request
+from jwt.exceptions import InvalidTokenError
+from fastapi import FastAPI, Depends, Header, Request
 from fastapi.responses import Response
 from fastapi.security.utils import get_authorization_scheme_param
 
@@ -38,13 +39,18 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=(".env", ".env.prod"))
 
 
-# TODO consider fastapi's DI
-settings = Settings()  # type: ignore
+@lru_cache
+def get_settings():
+    return Settings()  # type: ignore
+
+
+SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
 @app.post("/acquire_license")
 async def acquire_license(
     request: Request,
+    settings: SettingsDep,
     auth: Annotated[Optional[str], Header(alias="Authorization")] = None,
 ):
     license_req = await request.body()
@@ -54,7 +60,7 @@ async def acquire_license(
     try:
         token_data_raw = jwt.decode(token, settings.JWT_PUBKEY, algorithms=["EdDSA"])
         token_data = TypeAdapter(EntitlementTokenData).validate_python(token_data_raw)
-    except (ExpiredSignatureError, InvalidTokenError):
+    except InvalidTokenError:
         return Response(status_code=401)
     except ValidationError:
         return Response(status_code=400)

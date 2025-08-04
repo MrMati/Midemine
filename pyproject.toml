@@ -13,4 +13,5 @@ dependencies = [
     "types-aiofiles>=24.1.0.20250708",
     "pydantic-settings>=2.10.1",
     "cryptography>=45.0.5",
+    "pytest>=8.4.1",
 ]
