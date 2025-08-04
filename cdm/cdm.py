@@ -22,8 +22,8 @@ class MidemineCDM:
     def get_license_request(self, asset_id: str, key_id: str) -> bytes:
         return bytes([1, 2, 3])
 
-    def insert_license(self, license: bytes) -> LicenseParseResult:
-        self.license_data = license
+    def insert_license(self, license_data: bytes) -> LicenseParseResult:
+        self.license_data = license_data
         return LicenseParseResult(ok=True, msg=None)
 
     # TODO add output/decoding settings

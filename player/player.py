@@ -143,14 +143,14 @@ async def playback_encrypted(
 
     license_req = cdm_adapter.get_license_request(asset_info.id, asset_key_id)
 
-    license = await license_client.acquire_license(
+    license_blob = await license_client.acquire_license(
         license_req, entitlement_response.token
     )
-    if license is None:
+    if license_blob is None:
         print(f"Cannot acquire license for asset {asset_info.name}")
         return
 
-    lic_parse_result = cdm_adapter.insert_license(license)
+    lic_parse_result = cdm_adapter.insert_license(license_blob)
     if not lic_parse_result.ok:
         print(f"Cannot parse license for asset {asset_info.name}")
         return

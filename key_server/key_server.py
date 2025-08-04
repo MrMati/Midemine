@@ -35,18 +35,17 @@ def extract_token(authorization_header: Optional[str]) -> Optional[str]:
 
 class Settings(BaseSettings):
     JWT_PUBKEY: str
-    model_config = SettingsConfigDict(
-        env_file=(".env", ".env.prod")
-    )
+    model_config = SettingsConfigDict(env_file=(".env", ".env.prod"))
 
 
 # TODO consider fastapi's DI
-settings = Settings()
+settings = Settings()  # type: ignore
 
 
 @app.post("/acquire_license")
 async def acquire_license(
-    request: Request, auth: Annotated[Optional[str], Header(alias="Authorization")] = None
+    request: Request,
+    auth: Annotated[Optional[str], Header(alias="Authorization")] = None,
 ):
     license_req = await request.body()
     if (token := extract_token(auth)) is None:

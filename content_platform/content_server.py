@@ -9,7 +9,6 @@ from fastapi import FastAPI
 from fastapi.responses import Response, StreamingResponse
 from datetime import datetime, timedelta, timezone
 import jwt
-from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from shared.domain import (
     StreamingServiceStatus,
@@ -18,7 +17,7 @@ from shared.domain import (
     JWT,
     EntitlementTokenData,
 )
-from .repos import CatalogRepo, AssetDataRepo
+from .deps import CatalogRepoDep, AssetDataRepoDep, SettingsDep
 
 app = FastAPI()
 
@@ -34,39 +33,31 @@ def get_status():
 
 
 @app.get("/catalog/{asset_id}", status_code=200)
-def read_catalog_item(asset_id: str):
-    return CatalogRepo.get_asset_info(asset_id) or Response(status_code=404)
+def read_catalog_item(asset_id: str, catalog_repo: CatalogRepoDep):
+    return catalog_repo.get_asset_info(asset_id) or Response(status_code=404)
 
 
 @app.get("/assets/{asset_id}", status_code=200)
-def read_alternatives(asset_id: str):
-    if (stream := AssetDataRepo.get_asset_stream(asset_id)) is None:
+def read_alternatives(asset_id: str, asset_data_repo: AssetDataRepoDep):
+    if (stream := asset_data_repo.get_asset_stream(asset_id)) is None:
         return Response(status_code=404)
 
     return StreamingResponse(stream, media_type="application/octet-stream")
 
 
-class Settings(BaseSettings):
-    JWT_PRIVKEY: str
-    model_config = SettingsConfigDict(
-        env_file=(".env", ".env.prod")
-    )
-
-
-# TODO consider fastapi's DI
-settings = Settings()
-
-def create_access_token(data: dict, expires_delta: timedelta) -> JWT:
+def create_access_token(data: dict, expires_delta: timedelta, jwt_privkey: str) -> JWT:
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + expires_delta
     to_encode.update({"exp": expire})
-    encoded_token = jwt.encode(to_encode, settings.JWT_PRIVKEY, algorithm="EdDSA")
+    encoded_token = jwt.encode(to_encode, jwt_privkey, algorithm="EdDSA")
     return JWT(encoded_token)
 
 
 @app.post("/entitlement", status_code=200)
-def get_entitlement(entl_msg: EntitlementMessage):
-    if not CatalogRepo.check_asset_exists(
+def get_entitlement(
+    entl_msg: EntitlementMessage, catalog_repo: CatalogRepoDep, settings: SettingsDep
+):
+    if not catalog_repo.check_asset_exists(
         entl_msg.asset_id
     ) or entl_msg.usage_type not in ["playback", "offline"]:
         return Response(status_code=406)
@@ -78,6 +69,7 @@ def get_entitlement(entl_msg: EntitlementMessage):
     encoded_entl_msg = create_access_token(
         data=token_data,
         expires_delta=timedelta(minutes=30),  # FIXME magic number
+        jwt_privkey=settings.JWT_PRIVKEY,
     )
 
     return EntitlementResponse(claims=[], token=encoded_entl_msg)

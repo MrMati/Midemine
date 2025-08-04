@@ -1,4 +1,5 @@
 from typing import Optional, AsyncIterator
+from abc import ABC, abstractmethod
 
 import aiofiles
 
@@ -27,26 +28,39 @@ asset_filepaths = {
 }
 
 
-class CatalogRepo:
-    @staticmethod
-    def check_asset_exists(asset_id: str) -> bool:
+class CatalogRepo(ABC):
+    @abstractmethod
+    def check_asset_exists(self, asset_id: str) -> bool:
+        pass
+
+    @abstractmethod
+    def get_asset_info(self, asset_id: str) -> Optional[MediaAssetInfo]:
+        pass
+
+
+class RealCatalogRepo(CatalogRepo):
+    def check_asset_exists(self, asset_id: str) -> bool:
         return asset_id in catalog
 
-    @staticmethod
-    def get_asset_info(asset_id: str) -> Optional[MediaAssetInfo]:
+    def get_asset_info(self, asset_id: str) -> Optional[MediaAssetInfo]:
         return catalog.get(asset_id)
 
 
-# TODO move to utils, verify 
+# TODO move to utils, verify
 async def stream_file(path: str) -> AsyncIterator[bytes]:
     async with aiofiles.open(path, mode="rb") as f:
         while chunk := await f.read(1024 * 1024):  # 1MB chunks
             yield chunk
 
 
-class AssetDataRepo:
-    @staticmethod
-    def get_asset_stream(asset_id: str) -> Optional[AsyncIterator[bytes]]:
+class AssetDataRepo(ABC):
+    @abstractmethod
+    def get_asset_stream(self, asset_id: str) -> Optional[AsyncIterator[bytes]]:
+        pass
+
+
+class RealAssetDataRepo(AssetDataRepo):
+    def get_asset_stream(self, asset_id: str) -> Optional[AsyncIterator[bytes]]:
         if (filepath := asset_filepaths.get(asset_id)) is None:
             return None
         return stream_file(f"assets/{filepath}")
