@@ -1,28 +1,48 @@
 from datetime import timedelta
 
 from fastapi.testclient import TestClient
+import pytest
 
-from .conftest import OverridePlatformSettings
+from .conftest import MockPlatformSettings
 
 from content_platform.content_server import create_access_token
 from shared.domain import EntitlementTokenData
 
 
-def do_license_acquire(
+@pytest.mark.parametrize(
+    "bad_token_format,good,delta_minutes,bad_lic_req,auth_type,expect_status",
+    [
+        (False, True, 30, False, "Bearer", 200),
+        (True, True, 30, False, "Bearer", 400),
+        (False, False, 30, False, "Bearer", 400),
+        (False, True, -1, False, "Bearer", 401),
+        (False, True, 30, True, "Bearer", 400),
+        (False, True, 30, False, "Token", 401),
+    ],
+    ids=[
+        "success",
+        "bad_token_format",
+        "bad_token_data",
+        "expired",
+        "bad_lic_req",
+        "bad_auth_type",
+    ],
+)
+def test_license_acquire(
     key_server_client: TestClient,
-    expect_status: int = 200,
-    bad_token_format: bool = False,
-    good: bool = True,
-    delta_minutes: int = 30,
-    bad_lic_req: bool = False,
-    auth_type: str = "Bearer",
+    bad_token_format: bool,
+    good: bool,
+    delta_minutes: int,
+    bad_lic_req: bool,
+    auth_type: str,
+    expect_status: int,
 ) -> None:
     token_data = EntitlementTokenData(good=good).model_dump()
 
     encoded_entl_msg = create_access_token(
         data={} if bad_token_format else token_data,
         expires_delta=timedelta(minutes=delta_minutes),
-        jwt_privkey=OverridePlatformSettings().JWT_PRIVKEY,
+        jwt_privkey=MockPlatformSettings().JWT_PRIVKEY,
     )
 
     license_request = bytes([1]) if bad_lic_req else bytes([1, 2, 3])
@@ -37,27 +57,3 @@ def do_license_acquire(
 
     if expect_status == 200:
         assert response.content == b"good-license"
-
-
-def test_license_acquire_success(key_server_client: TestClient):
-    do_license_acquire(key_server_client)
-
-
-def test_license_acquire_bad_token_format(key_server_client: TestClient):
-    do_license_acquire(key_server_client, bad_token_format=True, expect_status=400)
-
-
-def test_license_acquire_bad_token_values(key_server_client: TestClient):
-    do_license_acquire(key_server_client, good=False, expect_status=400)
-
-
-def test_license_acquire_expired(key_server_client: TestClient):
-    do_license_acquire(key_server_client, delta_minutes=-1, expect_status=401)
-
-
-def test_license_acquire_bad_lic_req(key_server_client: TestClient):
-    do_license_acquire(key_server_client, bad_lic_req=True, expect_status=400)
-
-
-def test_license_acquire_bad_auth(key_server_client: TestClient):
-    do_license_acquire(key_server_client, auth_type="Token", expect_status=401)
